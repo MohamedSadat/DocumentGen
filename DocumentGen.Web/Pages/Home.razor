@@ -1,0 +1,198 @@
+﻿@* Pages/Index.razor *@
+@page "/"
+@using DocumentGen.Shared.Models
+@using System.Text.Json
+@inject HttpClient Http
+@inject IJSRuntime JS
+
+<PageTitle>DocumentGen - Template Designer</PageTitle>
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-md-6">
+            <h3>Template Editor</h3>
+
+            <div class="mb-3">
+                <label>Select Template:</label>
+                <select class="form-select" @onchange="LoadTemplate">
+                    <option value="">Custom Template</option>
+                    <option value="invoice">Invoice Template</option>
+                    <option value="receipt">Receipt Template</option>
+                </select>
+            </div>
+
+            <div class="mb-3">
+                <label>Template Content:</label>
+                <textarea class="form-control font-monospace"
+                          rows="20"
+                          @bind="TemplateContent"
+                          @bind:event="oninput"></textarea>
+            </div>
+
+            <div class="mb-3">
+                <label>Sample Data (JSON):</label>
+                <textarea class="form-control font-monospace"
+                          rows="10"
+                          @bind="DataContent"
+                          @bind:event="oninput"></textarea>
+            </div>
+
+            <button class="btn btn-primary" @onclick="GeneratePreview">
+                <i class="bi bi-eye"></i> Generate Preview
+            </button>
+
+            <button class="btn btn-success" @onclick="() => GenerateDocument(OutputFormat.PDF)">
+                <i class="bi bi-file-pdf"></i> Download PDF
+            </button>
+        </div>
+
+        <div class="col-md-6">
+            <h3>Preview</h3>
+
+            @if (IsLoading)
+            {
+                <div class="text-center p-5">
+                    <div class="spinner-border" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                </div>
+            }
+            else if (!string.IsNullOrEmpty(ErrorMessage))
+            {
+                <div class="alert alert-danger">
+                    @ErrorMessage
+                </div>
+            }
+            else if (PreviewContent != null)
+            {
+                <iframe srcdoc="@PreviewContent"
+                        style="width: 100%; height: 600px; border: 1px solid #ddd;">
+                </iframe>
+            }
+            else
+            {
+                <div class="alert alert-info">
+                    Click "Generate Preview" to see your document
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private string TemplateContent = @"<h1>Hello {{ name }}!</h1>
+<p>Welcome to DocumentGen.</p>
+<p>Today's date: {{ date | date.format 'MMMM dd, yyyy' }}</p>";
+
+    private string DataContent = @"{
+  ""name"": ""World"",
+  ""date"": ""2024-01-15""
+}";
+
+    private string? PreviewContent;
+    private bool IsLoading;
+    private string? ErrorMessage;
+
+    private async Task LoadTemplate(ChangeEventArgs e)
+    {
+        var templateId = e.Value?.ToString();
+        if (string.IsNullOrEmpty(templateId)) return;
+
+        // Load predefined templates
+        if (templateId == "invoice")
+        {
+            DataContent = @"{
+  ""invoice"": {
+    ""number"": ""INV-001"",
+    ""date"": ""2024-01-15"",
+    ""subtotal"": 1000,
+    ""taxRate"": 10,
+    ""tax"": 100,
+    ""total"": 1100,
+    ""terms"": ""Net 30""
+  },
+  ""company"": {
+    ""name"": ""Your Company"",
+    ""address"": ""123 Main St"",
+    ""city"": ""New York"",
+    ""state"": ""NY"",
+    ""zip"": ""10001""
+  },
+  ""customer"": {
+    ""name"": ""Customer Inc"",
+    ""address"": ""456 Oak Ave"",
+    ""city"": ""Los Angeles"",
+    ""state"": ""CA"",
+    ""zip"": ""90001""
+  },
+  ""items"": [
+    {
+      ""description"": ""Consulting Services"",
+      ""quantity"": 10,
+      ""unitPrice"": 100
+    }
+  ]
+}";
+        }
+    }
+
+    private async Task GeneratePreview()
+    {
+        await GenerateDocument(OutputFormat.HTML, true);
+    }
+
+    private async Task GenerateDocument(OutputFormat format, bool isPreview = false)
+    {
+        try
+        {
+            IsLoading = true;
+            ErrorMessage = null;
+
+            // Parse JSON data
+            var data = JsonSerializer.Deserialize<Dictionary<string, object>>(DataContent);
+
+            format = OutputFormat.HTML;
+            var request = new DocumentRequest
+            {
+                TemplateContent = TemplateContent,
+                Data = data ?? new(),
+                Format = format
+            };
+
+            // Use your actual API URL
+            var apiUrl = "https://localhost:7265/api/v1/document/";
+            var endpoint = isPreview ? "preview" : "generate";
+
+            var response = await Http.PostAsJsonAsync($"{apiUrl}{endpoint}", request);
+
+            if (response.IsSuccessStatusCode)
+            {
+                if (isPreview)
+                {
+                    PreviewContent = await response.Content.ReadAsStringAsync();
+                }
+                else
+                {
+                    var bytes = await response.Content.ReadAsByteArrayAsync();
+                    var fileName = $"document.{format.ToString().ToLower()}";
+
+                    // Download file
+                    await JS.InvokeVoidAsync("downloadFile", fileName, bytes);
+                }
+            }
+            else
+            {
+                var error = await response.Content.ReadAsStringAsync();
+                ErrorMessage = $"Error: {error}";
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+}
